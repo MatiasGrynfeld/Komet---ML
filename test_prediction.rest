@@ -1,5 +1,8 @@
-### Test Asteroid Impact Prediction API
-POST http://localhost:8000/predict/predict
+@baseUrl = https://komet-ml.onrender.com
+# @baseUrl = http://localhost:8000
+
+### Test Asteroid Impact Prediction API - Large asteroid
+POST {{baseUrl}}/predict/predict
 Content-Type: application/json
 
 {
@@ -10,7 +13,7 @@ Content-Type: application/json
 }
 
 ### Alternative test - Smaller asteroid
-POST https://komet-ml.onrender.com/predict/predict
+POST {{baseUrl}}/predict/predict
 Content-Type: application/json
 
 {
@@ -21,7 +24,7 @@ Content-Type: application/json
 }
 
 ### Health check (router)
-GET https://komet-ml.onrender.com/predict/
+GET {{baseUrl}}/predict/
 
 ### Health check (main)
-GET http://localhost:8000/
+GET {{baseUrl}}
