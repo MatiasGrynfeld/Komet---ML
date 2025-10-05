@@ -1,0 +1,13 @@
+fastapi[standard]
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+numpy
+polars
+psutil
+python-json-logger
+python-dotenv
+aiohttp
+matplotlib
+scikit-learn

@@ -1,0 +1,27 @@
+### Test Asteroid Impact Prediction API
+POST http://localhost:8000/predict/predict
+Content-Type: application/json
+
+{
+    "mass": 1000000,
+    "velocity": 20000,
+    "latitude": 40.7128,
+    "longitude": -74.0060
+}
+
+### Alternative test - Smaller asteroid
+POST http://localhost:8000/predict/predict
+Content-Type: application/json
+
+{
+    "mass": 50000,
+    "velocity": 15000,
+    "latitude": 35.6762,
+    "longitude": 139.6503
+}
+
+### Health check (router)
+GET http://localhost:8000/predict/
+
+### Health check (main)
+GET http://localhost:8000/

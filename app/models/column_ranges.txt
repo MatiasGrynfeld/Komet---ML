@@ -1,0 +1,10 @@
+mag: 3.38 - 9.5
+time: -2208574800000 - 1759643597014
+coordinates: Range not applicable (`min` operation not supported for dtype `list[f64]`)
+felt: 0 - 184649
+cdi: 0.0 - 9.1
+mmi: 0.0 - 10.0
+alert: green - yellow
+sig: 176 - 2910
+tsunami: 0 - 1
+magType: Mb - uk

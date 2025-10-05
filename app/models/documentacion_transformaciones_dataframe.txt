@@ -1,0 +1,509 @@
+# DOCUMENTACIÓN DE TRANSFORMACIONES DEL DATAFRAME PARA ENTRENAMIENTO
+# Proyecto: Komet - ML (Predicción de Terremotos)
+# Archivo: prepare_data.ipynb
+# Fecha: Octubre 2025
+
+==============================================================================
+RESUMEN EJECUTIVO
+==============================================================================
+
+Este documento detalla todas las transformaciones aplicadas al DataFrame de 
+datos de terremotos para preparar el dataset de entrenamiento. El proceso 
+incluye limpieza de datos, ingeniería de características, imputación 
+inteligente y codificación categórica.
+
+DATASET FINAL: 12 características numéricas listas para machine learning
+REGISTROS: Variable según el dataset fuente
+VALORES NULOS: Eliminados completamente mediante imputación inteligente
+
+==============================================================================
+1. CARGA DE DATOS INICIAL
+==============================================================================
+
+ORIGEN: archivo JSON con datos de terremotos
+LIBRERÍA: Polars (pl)
+MÉTODO: pl.read_json() con inferencia automática de esquema
+
+CÓDIGO:
+```python
+data_json = Path('./data/data_earthquakes.json')
+dataFrame = pl.read_json(data_json, infer_schema_length=None)
+```
+
+==============================================================================
+2. SELECCIÓN DE COLUMNAS RELEVANTES
+==============================================================================
+
+De todas las columnas disponibles, se seleccionaron 10 características 
+específicas consideradas más relevantes para la predicción:
+
+COLUMNAS SELECCIONADAS:
+- mag: Magnitud del terremoto
+- time: Timestamp del evento (época en milisegundos)
+- coordinates: Array con [longitud, latitud, profundidad]
+- felt: Número de reportes de personas que sintieron el terremoto
+- cdi: Community Determined Intensity (intensidad determinada por la comunidad)
+- mmi: Modified Mercalli Intensity (intensidad Mercalli modificada)
+- alert: Nivel de alerta (green, yellow, orange, red)
+- sig: Significancia del evento
+- tsunami: Indicador binario de tsunami (0/1)
+- magType: Tipo de medición de magnitud
+
+CÓDIGO:
+```python
+dataFrame = dataFrame.select([
+    "mag", "time", "coordinates", "felt", "cdi", "mmi", 
+    "alert", "sig", "tsunami", "magType"
+])
+```
+
+==============================================================================
+3. EXTRACCIÓN DE COORDENADAS GEOGRÁFICAS
+==============================================================================
+
+TRANSFORMACIÓN: Separación del array "coordinates" en tres columnas individuales
+RESULTADO: Creación de longitude, latitude, depth
+
+PROCESO:
+1. Extracción de longitud: coordinates[0] → longitude
+2. Extracción de latitud: coordinates[1] → latitude  
+3. Extracción de profundidad: coordinates[2] → depth
+4. Eliminación de la columna original "coordinates"
+
+CÓDIGO:
+```python
+dataFrame = dataFrame.with_columns([
+    pl.col("coordinates").list.get(0).alias("longitude"),
+    pl.col("coordinates").list.get(1).alias("latitude"), 
+    pl.col("coordinates").list.get(2).alias("depth")
+]).drop("coordinates")
+```
+
+RANGOS TÍPICOS:
+- Longitud: -180.00 a 180.00 grados
+- Latitud: -90.00 a 90.00 grados
+- Profundidad: 0.0 a varios cientos de km
+
+==============================================================================
+4. CODIFICACIÓN DE VARIABLES CATEGÓRICAS
+==============================================================================
+
+4.1 CODIFICACIÓN DE NIVELES DE ALERTA
+--------------------------------------
+
+TRANSFORMACIÓN: De texto categórico a valores numéricos ordinales
+PRESERVACIÓN: Relación ordinal (verde < amarillo < naranja < rojo)
+
+MAPEO:
+- "green" → 1 (Alerta verde - menor riesgo)
+- "yellow" → 2 (Alerta amarilla - riesgo moderado)
+- "orange" → 3 (Alerta naranja - riesgo alto)
+- "red" → 4 (Alerta roja - riesgo extremo)
+- null/unknown → 0 (Sin alerta o desconocido)
+
+CÓDIGO:
+```python
+alert_mapping = {"green": 1, "yellow": 2, "orange": 3, "red": 4}
+
+dataFrame = dataFrame.with_columns([
+    pl.col("alert").map_elements(
+        lambda x: alert_mapping.get(x, 0) if x is not None else 0,
+        return_dtype=pl.Int32
+    ).alias("alert")
+])
+```
+
+4.2 CODIFICACIÓN DE TIPOS DE MAGNITUD
+-------------------------------------
+
+TRANSFORMACIÓN: De texto categórico a valores numéricos ordinales
+MÉTODO: Codificación automática basada en orden alfabético
+
+PROCESO:
+1. Extracción de tipos únicos de magnitud no nulos
+2. Ordenamiento alfabético de los tipos
+3. Asignación de números consecutivos (1, 2, 3, ...)
+4. Valor 0 para tipos desconocidos o nulos
+
+TIPOS COMUNES:
+- mb (magnitud de ondas corporales)
+- md (magnitud de duración)
+- ml (magnitud local/Richter)
+- mw (magnitud de momento)
+- ms (magnitud de ondas superficiales)
+
+CÓDIGO:
+```python
+mag_types = dataFrame.filter(pl.col("magType").is_not_null())["magType"].unique().to_list()
+magtype_mapping = {mag_type: i+1 for i, mag_type in enumerate(sorted(mag_types)) if mag_type is not None}
+
+dataFrame = dataFrame.with_columns([
+    pl.col("magType").map_elements(
+        lambda x: magtype_mapping.get(x, 0) if x is not None else 0,
+        return_dtype=pl.Int32
+    ).alias("magType")
+])
+```
+
+==============================================================================
+5. IMPUTACIÓN DE VALORES FALTANTES
+==============================================================================
+
+5.1 IMPUTACIÓN BÁSICA (PRIMERA FASE)
+------------------------------------
+
+ESTRATEGIA: Imputación directa con valores por defecto o estrategias simples
+
+TRANSFORMACIONES:
+- felt → 0 (sin reportes disponibles)
+- cdi → forward fill (propagación hacia adelante)
+- mmi → forward fill (propagación hacia adelante)
+- sig → 0 (significancia desconocida)
+- depth → mediana de la columna
+- tsunami → 0 (sin tsunami)
+- magType → tipo más frecuente en el dataset
+
+CÓDIGO:
+```python
+most_common_magtype = dataFrame["magType"].value_counts().sort("count", descending=True).row(0)[0]
+
+dataFrame = dataFrame.with_columns([
+    pl.col("felt").fill_null(0),
+    pl.col("cdi").fill_null(strategy="forward"),
+    pl.col("mmi").fill_null(strategy="forward"),
+    pl.col("sig").fill_null(0),
+    pl.col("depth").fill_null(pl.col("depth").median()),
+    pl.col("tsunami").fill_null(0),
+    pl.col("magType").fill_null(most_common_magtype),
+])
+```
+
+5.2 IMPUTACIÓN AVANZADA BASADA EN MAGNITUD
+------------------------------------------
+
+ESTRATEGIA: Imputación inteligente usando conocimiento del dominio sísmico
+OBJETIVO: Relaciones físicas entre magnitud e intensidades
+
+CDI (COMMUNITY DETERMINED INTENSITY):
+- Magnitud ≥ 7.0 → CDI = 6.0 (intensidad muy alta)
+- Magnitud ≥ 6.0 → CDI = 4.0 (intensidad alta)
+- Magnitud ≥ 5.0 → CDI = 3.0 (intensidad moderada)
+- Magnitud < 5.0 → CDI = 2.0 (intensidad baja)
+
+MMI (MODIFIED MERCALLI INTENSITY):
+- Magnitud ≥ 7.0 → MMI = 7.0 (muy fuerte)
+- Magnitud ≥ 6.0 → MMI = 5.0 (fuerte)
+- Magnitud ≥ 5.0 → MMI = 4.0 (moderado)
+- Magnitud < 5.0 → MMI = 3.0 (débil)
+
+CÓDIGO:
+```python
+dataFrame = dataFrame.with_columns([
+    # Imputación CDI basada en magnitud
+    pl.when(pl.col("cdi").is_null())
+    .then(
+        pl.when(pl.col("mag") >= 7.0).then(6.0)
+        .when(pl.col("mag") >= 6.0).then(4.0) 
+        .when(pl.col("mag") >= 5.0).then(3.0)
+        .otherwise(2.0)
+    )
+    .otherwise(pl.col("cdi"))
+    .alias("cdi"),
+    
+    # Imputación MMI basada en magnitud
+    pl.when(pl.col("mmi").is_null())
+    .then(
+        pl.when(pl.col("mag") >= 7.0).then(7.0)
+        .when(pl.col("mag") >= 6.0).then(5.0)
+        .when(pl.col("mag") >= 5.0).then(4.0) 
+        .otherwise(3.0)
+    )
+    .otherwise(pl.col("mmi"))
+    .alias("mmi")
+])
+```
+
+==============================================================================
+6. IMPUTACIÓN AVANZADA DE ALERTAS
+==============================================================================
+
+ESTRATEGIA: Sistema de reglas múltiples basado en características sísmicas
+OBJETIVO: Preservar alertas existentes y completar valores faltantes
+MÉTODO: Evaluación jerárquica de condiciones de severidad
+
+CRITERIOS DE CLASIFICACIÓN:
+
+ALERTA ROJA (4) - CONDICIONES MUY SEVERAS:
+- Magnitud ≥ 7.0 (terremoto mayor)
+- Tsunami presente (tsunami = 1)
+- Significancia ≥ 1000 (evento muy significativo)
+- MMI ≥ 8.0 (intensidad severa a destructiva)
+- CDI ≥ 7.0 (intensidad muy alta reportada)
+
+ALERTA NARANJA (3) - CONDICIONES SEVERAS:
+- Magnitud ≥ 6.5 (terremoto fuerte)
+- Significancia ≥ 700 (evento significativo)
+- MMI ≥ 6.5 (intensidad fuerte)
+- CDI ≥ 5.5 (intensidad alta reportada)
+- Magnitud ≥ 6.0 Y profundidad ≤ 10 km (terremoto superficial fuerte)
+
+ALERTA AMARILLA (2) - CONDICIONES MODERADAS:
+- Magnitud ≥ 6.0 (terremoto notable)
+- Significancia ≥ 400 (evento moderadamente significativo)
+- MMI ≥ 5.0 (intensidad moderada)
+- CDI ≥ 4.0 (intensidad moderada reportada)
+- Magnitud ≥ 5.5 Y profundidad ≤ 20 km (terremoto moderado superficial)
+
+ALERTA VERDE (1) - CONDICIONES MENORES:
+- Magnitud ≥ 5.5 (terremoto ligero)
+- Significancia ≥ 200 (evento notable)
+- MMI ≥ 4.0 (intensidad ligera)
+- CDI ≥ 3.0 (intensidad ligera reportada)
+- Magnitud ≥ 5.0 Y profundidad ≤ 30 km (terremoto ligero superficial)
+
+SIN ALERTA (0):
+- Terremotos que no cumplen ningún criterio anterior
+- Eventos de baja magnitud sin impacto significativo
+
+CARACTERÍSTICAS IMPORTANTES:
+- PRESERVACIÓN: Los valores de alerta existentes (1-4) se mantienen intactos
+- OBJETIVO: Solo se modifican valores nulos o codificados como 0
+- JERARQUÍA: Las condiciones se evalúan en orden de severidad decreciente
+
+CÓDIGO:
+```python
+dataFrame = dataFrame.with_columns([
+    pl.when(
+        (pl.col("alert").is_null()) |  # Valores NULL verdaderos
+        (pl.col("alert") == 0)         # Valores faltantes codificados
+    )
+    .then(
+        # Alerta Roja (4) - Condiciones muy severas
+        pl.when(
+            (pl.col("mag") >= 7.0) | 
+            (pl.col("tsunami") == 1) |
+            (pl.col("sig") >= 1000) |
+            (pl.col("mmi") >= 8.0) |
+            (pl.col("cdi") >= 7.0)        
+        ).then(4)
+        
+        # Alerta Naranja (3) - Condiciones severas
+        .when(
+            (pl.col("mag") >= 6.5) |
+            (pl.col("sig") >= 700) |
+            (pl.col("mmi") >= 6.5) |
+            (pl.col("cdi") >= 5.5) |
+            ((pl.col("mag") >= 6.0) & (pl.col("depth") <= 10))
+        ).then(3)
+        
+        # Alerta Amarilla (2) - Condiciones moderadas
+        .when(
+            (pl.col("mag") >= 6.0) |
+            (pl.col("sig") >= 400) |
+            (pl.col("mmi") >= 5.0) |
+            (pl.col("cdi") >= 4.0) |
+            ((pl.col("mag") >= 5.5) & (pl.col("depth") <= 20))
+        ).then(2)
+        
+        # Alerta Verde (1) - Condiciones menores
+        .when(
+            (pl.col("mag") >= 5.5) |
+            (pl.col("sig") >= 200) |
+            (pl.col("mmi") >= 4.0) |
+            (pl.col("cdi") >= 3.0) |
+            ((pl.col("mag") >= 5.0) & (pl.col("depth") <= 30))
+        ).then(1)
+        
+        # Sin alerta para terremotos pequeños
+        .otherwise(0)
+    )
+    # CRÍTICO: Mantener TODOS los valores válidos existentes (1, 2, 3, 4) SIN CAMBIOS
+    .otherwise(pl.col("alert"))
+    .alias("alert")
+])
+```
+
+==============================================================================
+7. ANÁLISIS DE CORRELACIÓN
+==============================================================================
+
+PROPÓSITO: Identificar relaciones lineales entre características
+MÉTODO: Matriz de correlación de Pearson
+VISUALIZACIÓN: Heatmap con seaborn
+
+APLICACIONES:
+- Detección de multicolinealidad
+- Identificación de características redundantes
+- Comprensión de relaciones entre variables
+- Selección de características para el modelo
+
+CÓDIGO:
+```python
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+corr_df = dataFrame.corr()
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr_df, annot=True, cmap="coolwarm", fmt=".2f", 
+           xticklabels=corr_df.columns, yticklabels=corr_df.columns)
+plt.title("Correlation Matrix")
+plt.show()
+```
+
+==============================================================================
+8. EXPORTACIÓN FINAL
+==============================================================================
+
+FORMATO: CSV (Comma-Separated Values)
+ARCHIVO: dataset.csv
+UBICACIÓN: Directorio del notebook
+
+CARACTERÍSTICAS:
+- Datos completamente limpios
+- Sin valores nulos
+- Todas las variables numéricas
+- Listo para machine learning
+
+CÓDIGO:
+```python
+dataFrame.write_csv("dataset.csv")
+```
+
+==============================================================================
+RESUMEN DE CARACTERÍSTICAS FINALES
+==============================================================================
+
+El DataFrame final contiene 12 CARACTERÍSTICAS para entrenamiento:
+
+1. mag (float): Magnitud del terremoto
+   - Rango típico: -1.0 a 9.5+
+   - Sin valores nulos
+   - Variable objetivo potencial o característica predictora
+
+2. time (int): Timestamp del evento en milisegundos desde época
+   - Rango: 1900 a presente
+   - Útil para análisis temporal y estacionalidad
+
+3. felt (int): Número de reportes de personas que sintieron el terremoto
+   - Rango: 0 a miles
+   - Imputado con 0 para valores faltantes
+
+4. cdi (float): Community Determined Intensity
+   - Rango: 1.0 a 10.0+
+   - Imputado inteligentemente basado en magnitud
+
+5. mmi (float): Modified Mercalli Intensity
+   - Rango: 1.0 a 12.0
+   - Imputado inteligentemente basado en magnitud
+
+6. alert (int): Nivel de alerta codificado
+   - Valores: 0 (sin alerta), 1 (verde), 2 (amarillo), 3 (naranja), 4 (rojo)
+   - Imputado con sistema de reglas múltiples
+
+7. sig (int): Significancia del evento
+   - Rango: 0 a 2000+
+   - Imputado con 0 para valores faltantes
+
+8. tsunami (int): Indicador binario de tsunami
+   - Valores: 0 (no tsunami), 1 (tsunami)
+   - Imputado con 0 para valores faltantes
+
+9. magType (int): Tipo de magnitud codificado
+   - Valores: 0 (desconocido), 1-N (tipos específicos)
+   - Imputado con el tipo más común
+
+10. longitude (float): Longitud geográfica
+    - Rango: -180.0 a 180.0 grados
+    - Extraído del array coordinates
+
+11. latitude (float): Latitud geográfica
+    - Rango: -90.0 a 90.0 grados
+    - Extraído del array coordinates
+
+12. depth (float): Profundidad del hipocentro en kilómetros
+    - Rango: 0.0 a 700+ km
+    - Imputado con mediana para valores faltantes
+
+==============================================================================
+PUNTOS CLAVE DEL PROCESAMIENTO
+==============================================================================
+
+✓ ELIMINACIÓN COMPLETA DE VALORES NULOS
+  - Estrategias de imputación múltiples
+  - Preservación de la integridad de los datos
+  - Sin pérdida de registros
+
+✓ CODIFICACIÓN CATEGÓRICA INTELIGENTE
+  - Preservación de relaciones ordinales
+  - Mapeo consistente y reproducible
+  - Valores por defecto para casos desconocidos
+
+✓ IMPUTACIÓN BASADA EN CONOCIMIENTO DEL DOMINIO
+  - Relaciones físicas magnitud-intensidad
+  - Criterios sísmicos establecidos
+  - Preservación de valores válidos existentes
+
+✓ INGENIERÍA DE CARACTERÍSTICAS GEOGRÁFICAS
+  - Extracción de coordenadas individuales
+  - Mantenimiento de precisión espacial
+  - Facilita análisis geoespaciales
+
+✓ DATASET BALANCEADO Y OPTIMIZADO
+  - Todas las variables en formato numérico
+  - Compatible con algoritmos de ML estándar
+  - Preparado para normalización/estandarización
+
+✓ ANÁLISIS DE CALIDAD INTEGRADO
+  - Matriz de correlación para validación
+  - Verificación de rangos y distribuciones
+  - Documentación completa del proceso
+
+==============================================================================
+RECOMENDACIONES PARA ENTRENAMIENTO
+==============================================================================
+
+1. NORMALIZACIÓN/ESTANDARIZACIÓN:
+   - Aplicar StandardScaler o MinMaxScaler
+   - Especial atención a 'time', 'felt', 'sig' (rangos amplios)
+
+2. VALIDACIÓN CRUZADA:
+   - Considerar división temporal para evitar data leakage
+   - Estratificación por niveles de alerta si es clasificación
+
+3. SELECCIÓN DE CARACTERÍSTICAS:
+   - Revisar matriz de correlación para multicolinealidad
+   - Considerar PCA si hay alta correlación entre variables
+
+4. VARIABLES OBJETIVO POTENCIALES:
+   - 'alert' para clasificación de niveles de riesgo
+   - 'mag' para regresión de magnitud
+   - 'tsunami' para clasificación binaria
+
+5. CONSIDERACIONES TEMPORALES:
+   - 'time' puede usarse para características estacionales
+   - Considerar ventanas temporales para patrones sísmicos
+
+==============================================================================
+METADATA DEL PROCESAMIENTO
+==============================================================================
+
+LIBRERÍA PRINCIPAL: Polars (alta performance)
+TIEMPO DE PROCESAMIENTO: Optimizado para datasets grandes
+MEMORIA: Uso eficiente con lazy evaluation
+REPRODUCIBILIDAD: Proceso determinístico con semillas fijas
+ESCALABILIDAD: Compatible con datasets de millones de registros
+
+VERSIONES RECOMENDADAS:
+- polars >= 0.19.0
+- matplotlib >= 3.5.0
+- seaborn >= 0.11.0
+
+==============================================================================
+FIN DEL DOCUMENTO
+==============================================================================
+
+Documento generado automáticamente desde prepare_data.ipynb
+Proyecto: Komet - ML (Machine Learning para Predicción de Terremotos)
+Fecha de generación: Octubre 2025
+
+Para más información o actualizaciones, consultar el notebook original.

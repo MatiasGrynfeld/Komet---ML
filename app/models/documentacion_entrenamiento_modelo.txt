@@ -1,0 +1,606 @@
+# DOCUMENTACIÓN DEL ENTRENAMIENTO DEL MODELO DE CLUSTERING
+# Proyecto: Komet - ML (Predicción de Terremotos)
+# Archivo: train_model.ipynb
+# Fecha: Octubre 2025
+
+==============================================================================
+RESUMEN EJECUTIVO
+==============================================================================
+
+Este documento detalla el proceso completo de entrenamiento del modelo de 
+clustering K-Means para la clasificación de eventos sísmicos. El modelo 
+utiliza datos de terremotos pre-procesados para identificar patrones y 
+agrupar eventos sísmicos similares en clusters geoespaciales y físicos.
+
+ALGORITMO SELECCIONADO: K-Means Clustering
+NÚMERO DE CLUSTERS: 4 (optimizado mediante método del codo)
+CARACTERÍSTICAS UTILIZADAS: 7 variables sísmicas principales
+FINALIDAD: Clasificación no supervisada de eventos sísmicos
+
+==============================================================================
+1. IMPORTACIÓN DE LIBRERÍAS
+==============================================================================
+
+LIBRERÍAS PRINCIPALES:
+- polars: Procesamiento de datos de alta performance
+- matplotlib.pyplot: Visualización de datos y gráficos
+- sklearn.preprocessing.StandardScaler: Normalización de características
+- sklearn.model_selection.train_test_split: División de datos (reservado)
+- sklearn.cluster.KMeans: Algoritmo de clustering K-Means
+
+LIBRERÍAS ADICIONALES:
+- seaborn: Visualizaciones estadísticas avanzadas
+- mpl_toolkits.mplot3d: Gráficos 3D
+- joblib: Serialización y guardado de modelos
+
+CÓDIGO:
+```python
+import polars as pl
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.cluster import KMeans
+import seaborn as sns
+from mpl_toolkits.mplot3d import Axes3D
+import joblib
+```
+
+==============================================================================
+2. CARGA Y EXPLORACIÓN INICIAL DE DATOS
+==============================================================================
+
+2.1 CARGA DEL DATASET PROCESADO
+-------------------------------
+
+ORIGEN: dataset.csv (generado por prepare_data.ipynb)
+MÉTODO: Lectura directa con Polars
+VALIDACIÓN: Verificación de estructura y contenido
+
+CÓDIGO:
+```python
+df = pl.read_csv("./dataset.csv")
+df.head()  # Visualización de primeras filas
+```
+
+2.2 VERIFICACIÓN DE CALIDAD DE DATOS
+------------------------------------
+
+CONTROL DE NULOS:
+- Verificación de valores faltantes
+- Confirmación de limpieza previa exitosa
+
+ANÁLISIS ESTADÍSTICO:
+- Distribuciones de variables
+- Rangos y valores extremos
+- Estadísticas descriptivas
+
+CÓDIGO:
+```python
+df.null_count()  # Verificación de valores nulos
+df.describe()    # Estadísticas descriptivas completas
+```
+
+RESULTADO ESPERADO: 0 valores nulos en todas las columnas
+
+==============================================================================
+3. SELECCIÓN Y NORMALIZACIÓN DE CARACTERÍSTICAS
+==============================================================================
+
+3.1 SELECCIÓN DE CARACTERÍSTICAS PARA CLUSTERING
+------------------------------------------------
+
+CARACTERÍSTICAS SELECCIONADAS (7 variables):
+1. mag: Magnitud del terremoto
+2. depth: Profundidad del hipocentro (km)
+3. latitude: Latitud geográfica
+4. longitude: Longitud geográfica
+5. sig: Significancia del evento
+6. cdi: Community Determined Intensity
+7. mmi: Modified Mercalli Intensity
+
+CRITERIOS DE SELECCIÓN:
+- Variables continuas con alta variabilidad
+- Representación física del evento sísmico
+- Información geoespacial relevante
+- Escalas de intensidad validadas
+
+VARIABLES EXCLUIDAS:
+- time: Información temporal no relevante para clustering espacial
+- felt: Correlacionada con intensidades
+- alert: Variable categórica derivada
+- tsunami: Variable binaria con pocos casos positivos
+- magType: Variable categórica
+
+CÓDIGO:
+```python
+features = ["mag", "depth", "latitude", "longitude", "sig", "cdi", "mmi"]
+```
+
+3.2 NORMALIZACIÓN ESTÁNDAR (Z-SCORE)
+------------------------------------
+
+MÉTODO: StandardScaler de scikit-learn
+TRANSFORMACIÓN: (x - μ) / σ
+OBJETIVO: Eliminar diferencias de escala entre variables
+
+JUSTIFICACIÓN:
+- K-Means es sensible a la escala de las variables
+- Variables como 'sig' tienen rangos amplios (0-2000+)
+- Variables geográficas tienen escalas diferentes
+- Normalización asegura igual importancia de todas las características
+
+PROCESO:
+1. Ajuste del escalador con datos de entrenamiento
+2. Transformación de características seleccionadas
+3. Creación de DataFrame normalizado
+4. Reemplazo de valores originales
+
+CÓDIGO:
+```python
+scaler = StandardScaler()
+scaled_values = scaler.fit_transform(df.select(features).to_numpy())
+
+# Creación de DataFrame con valores normalizados
+df_scaled = df.with_columns([
+    pl.Series(name, scaled_values[:, i]) for i, name in enumerate(features)
+])
+
+# Verificación de normalización
+df_scaled.select(features).describe()
+
+# Aplicación de normalización al DataFrame principal
+df = df.with_columns([
+    pl.Series(name, scaled_values[:, i]) for i, name in enumerate(features)
+])
+```
+
+VERIFICACIÓN POST-NORMALIZACIÓN:
+- Media ≈ 0 para todas las características
+- Desviación estándar ≈ 1 para todas las características
+
+==============================================================================
+4. OPTIMIZACIÓN DEL NÚMERO DE CLUSTERS
+==============================================================================
+
+4.1 MÉTODO DEL CODO (ELBOW METHOD)
+----------------------------------
+
+PROPÓSITO: Determinar el número óptimo de clusters
+MÉTRICA: Inercia (suma de distancias cuadráticas intra-cluster)
+RANGO EVALUADO: 1 a 15 clusters
+
+ALGORITMO:
+1. Entrenamiento de K-Means para cada valor de k
+2. Cálculo de inercia para cada modelo
+3. Visualización de curva inercia vs. número de clusters
+4. Identificación del "codo" en la curva
+
+FUNCIÓN DE OPTIMIZACIÓN:
+```python
+def optimize_kmeans(data, max_k=10):
+    means = []
+    inertias = []
+    
+    # Evaluación de diferentes valores de k
+    for k in range(1, max_k + 1):
+        kmeans = KMeans(n_clusters=k)
+        kmeans.fit(data)
+        means.append(k)
+        inertias.append(kmeans.inertia_)
+    
+    # Visualización de resultados
+    plt.figure(figsize=(10, 6))
+    plt.plot(means, inertias, marker='o')
+    plt.title('Elbow Method for Optimal k')
+    plt.xlabel('Number of clusters (k)')
+    plt.ylabel('Inertia')
+    plt.xticks(means)
+    plt.grid()
+    plt.show()
+    
+    print(inertias, means)
+```
+
+4.2 EJECUCIÓN DE OPTIMIZACIÓN
+-----------------------------
+
+PARÁMETROS:
+- max_k = 15 (evaluación hasta 15 clusters)
+- Datos normalizados completos
+
+CÓDIGO:
+```python
+optimize_kmeans(df, max_k=15)
+```
+
+INTERPRETACIÓN:
+- Búsqueda del punto donde la reducción de inercia se estabiliza
+- Balance entre complejidad del modelo y calidad del clustering
+- Consideración de interpretabilidad de los clusters
+
+RESULTADO ESPERADO: Identificación de k=4 como valor óptimo
+
+==============================================================================
+5. ENTRENAMIENTO DEL MODELO FINAL
+==============================================================================
+
+5.1 CONFIGURACIÓN DEL MODELO K-MEANS
+------------------------------------
+
+PARÁMETROS SELECCIONADOS:
+- n_clusters = 4 (basado en análisis del codo)
+- init = 'k-means++' (inicialización inteligente, por defecto)
+- max_iter = 300 (máximo de iteraciones, por defecto)
+- random_state = Sin especificar (reproducibilidad no crítica para clustering)
+
+ALGORITMO:
+- K-Means estándar de scikit-learn
+- Minimización de suma de cuadrados intra-cluster
+- Asignación de puntos al centroide más cercano
+
+CÓDIGO:
+```python
+kmeans = KMeans(n_clusters=4)
+kmeans.fit(df)
+```
+
+5.2 ASIGNACIÓN DE CLUSTERS
+--------------------------
+
+PROCESO:
+1. Entrenamiento del modelo con datos normalizados
+2. Obtención de etiquetas de cluster para cada punto
+3. Adición de columna 'cluster' al DataFrame
+
+CÓDIGO:
+```python
+df = df.with_columns([
+    pl.Series("cluster", kmeans.labels_)
+])
+```
+
+RESULTADO:
+- Cada evento sísmico asignado a uno de 4 clusters (0, 1, 2, 3)
+- DataFrame expandido con nueva columna 'cluster'
+
+==============================================================================
+6. ANÁLISIS Y VISUALIZACIÓN DE CLUSTERS
+==============================================================================
+
+6.1 VISUALIZACIÓN GEOESPACIAL
+-----------------------------
+
+PROPÓSITO: Análisis de distribución geográfica de clusters
+DIMENSIONES: Longitud vs. Latitud
+CODIFICACIÓN: Color por cluster
+
+CARACTERÍSTICAS:
+- Scatter plot con codificación cromática
+- Transparencia para manejar superposición
+- Barra de colores para interpretación
+
+CÓDIGO:
+```python
+plt.figure(figsize=(10, 6))
+plt.scatter(df["longitude"], df["latitude"], c=df["cluster"], 
+           cmap='tab10', s=5, alpha=0.6)
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.title("Clusters geoespaciales de eventos sísmicos")
+plt.colorbar(label="Cluster")
+plt.show()
+```
+
+ANÁLISIS ESPERADO:
+- Clusters con patrones geográficos identificables
+- Agrupación por regiones sísmicamente activas
+- Separación clara entre diferentes zonas tectónicas
+
+6.2 VISUALIZACIÓN 3D FÍSICA
+---------------------------
+
+PROPÓSITO: Análisis en espacio físico del evento sísmico
+DIMENSIONES: Magnitud, Profundidad, MMI
+CODIFICACIÓN: Color por cluster
+
+CÓDIGO:
+```python
+from mpl_toolkits.mplot3d import Axes3D
+
+fig = plt.figure(figsize=(10, 7))
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(df["mag"], df["depth"], df["mmi"], c=df["cluster"], 
+          cmap="tab10", s=5)
+ax.set_xlabel("Magnitud")
+ax.set_ylabel("Profundidad (km)")
+ax.set_zlabel("MMI", labelpad=-15)
+plt.title("Distribución de clusters en el espacio físico del evento")
+plt.show()
+```
+
+ANÁLISIS ESPERADO:
+- Separación por características físicas del evento
+- Clusters representando diferentes tipos de terremotos
+- Relaciones magnitud-profundidad-intensidad
+
+6.3 ANÁLISIS ESTADÍSTICO POR CLUSTERS
+-------------------------------------
+
+DISTRIBUCIONES UNIVARIADAS:
+Análisis de distribución de variables clave por cluster
+
+MAGNITUD POR CLUSTER:
+```python
+plt.figure(figsize=(12, 6))
+sns.boxplot(x="cluster", y="mag", data=df)
+plt.title("Distribución de magnitud por cluster")
+plt.show()
+```
+
+PROFUNDIDAD POR CLUSTER:
+```python
+plt.figure(figsize=(12, 6))
+sns.boxplot(x="cluster", y="depth", data=df)
+plt.title("Distribución de profundidad por cluster")
+plt.show()
+```
+
+INTERPRETACIÓN:
+- Identificación de clusters por rangos de magnitud
+- Análisis de patrones de profundidad
+- Caracterización de tipos de eventos sísmicos
+
+6.4 ESTADÍSTICAS RESUMIDAS POR CLUSTER
+--------------------------------------
+
+CÁLCULO DE CENTROIDES:
+Valores promedio de todas las variables por cluster
+
+CÓDIGO:
+```python
+summary = df.group_by("cluster").mean()
+summary
+```
+
+INFORMACIÓN PROPORCIONADA:
+- Centroide de cada cluster en todas las dimensiones
+- Caracterización numérica de cada grupo
+- Base para interpretación de tipos de terremotos
+
+==============================================================================
+7. PERSISTENCIA Y SERIALIZACIÓN DEL MODELO
+==============================================================================
+
+7.1 INFORMACIÓN DEL MODELO
+--------------------------
+
+METADATA DEL MODELO:
+- Número de clusters utilizados
+- Lista de características normalizadas
+- Configuración para reproducibilidad
+
+CÓDIGO:
+```python
+model_info = {
+    "n_clusters": kmeans.n_clusters,
+    "features_to_normalize": features,
+}
+```
+
+7.2 SERIALIZACIÓN CON JOBLIB
+----------------------------
+
+ARCHIVOS GENERADOS:
+1. kmeans_model.pkl: Modelo K-Means entrenado
+2. scaler.pkl: Escalador ajustado para normalización
+3. model_info.pkl: Metadata y configuración
+
+VENTAJAS DE JOBLIB:
+- Optimizado para objetos scikit-learn
+- Compresión automática
+- Carga rápida y eficiente
+
+CÓDIGO:
+```python
+import joblib
+
+joblib.dump(kmeans, "kmeans_model.pkl")
+joblib.dump(scaler, "scaler.pkl")
+joblib.dump(model_info, "model_info.pkl")
+```
+
+NOTA: El código original tiene un error - está marcado como "swift" pero debería ser "python"
+
+==============================================================================
+CARACTERIZACIÓN DE CLUSTERS ESPERADA
+==============================================================================
+
+Basado en el análisis típico de datos sísmicos, se esperan clusters con 
+las siguientes características:
+
+CLUSTER 0 - TERREMOTOS SUPERFICIALES DE BAJA MAGNITUD:
+- Magnitud: 2.0 - 4.5
+- Profundidad: 0 - 20 km
+- Ubicación: Zonas de actividad tectónica moderada
+- Características: Eventos locales, baja significancia
+
+CLUSTER 1 - TERREMOTOS INTERMEDIOS:
+- Magnitud: 4.5 - 6.0
+- Profundidad: 20 - 100 km
+- Ubicación: Bordes de placas tectónicas
+- Características: Intensidades moderadas, impacto regional
+
+CLUSTER 2 - TERREMOTOS PROFUNDOS:
+- Magnitud: Variable
+- Profundidad: 100+ km
+- Ubicación: Zonas de subducción
+- Características: Menor intensidad superficial pese a magnitud
+
+CLUSTER 3 - TERREMOTOS MAYORES:
+- Magnitud: 6.0+
+- Profundidad: Variable
+- Ubicación: Fallas principales
+- Características: Alta significancia, posible alerta
+
+==============================================================================
+PIPELINE DE PREDICCIÓN PARA NUEVOS DATOS
+==============================================================================
+
+Para utilizar el modelo entrenado con nuevos datos sísmicos:
+
+1. CARGA DE MODELOS:
+```python
+kmeans = joblib.load("kmeans_model.pkl")
+scaler = joblib.load("scaler.pkl")
+model_info = joblib.load("model_info.pkl")
+```
+
+2. PREPARACIÓN DE DATOS:
+- Extraer características especificadas en model_info["features_to_normalize"]
+- Aplicar el mismo scaler para normalización
+- Asegurar mismo orden de características
+
+3. PREDICCIÓN:
+```python
+# Normalización
+scaled_features = scaler.transform(new_data)
+
+# Predicción de cluster
+cluster_prediction = kmeans.predict(scaled_features)
+
+# Distancias a centroides (opcional)
+distances = kmeans.transform(scaled_features)
+```
+
+4. INTERPRETACIÓN:
+- Identificar tipo de evento sísmico basado en cluster
+- Comparar con caracterización de clusters conocidos
+- Evaluar nivel de riesgo según cluster asignado
+
+==============================================================================
+APLICACIONES DEL MODELO
+==============================================================================
+
+CLASIFICACIÓN AUTOMÁTICA:
+- Categorización rápida de eventos sísmicos detectados
+- Identificación de patrones anómalos
+- Priorización de eventos para análisis detallado
+
+ANÁLISIS GEOESPACIAL:
+- Identificación de zonas sísmicamente activas
+- Mapeo de tipos de actividad tectónica
+- Planificación de redes de monitoreo
+
+SISTEMA DE ALERTA:
+- Clasificación preliminar para sistemas de alerta temprana
+- Estimación rápida de impacto potencial
+- Activación de protocolos según tipo de evento
+
+INVESTIGACIÓN SÍSMICA:
+- Identificación de patrones temporales y espaciales
+- Caracterización de actividad tectónica regional
+- Validación de modelos geológicos
+
+==============================================================================
+LIMITACIONES Y CONSIDERACIONES
+==============================================================================
+
+LIMITACIONES DEL CLUSTERING:
+- No considera relaciones temporales entre eventos
+- Sensible a la selección de características
+- Asume distribuciones esféricas de clusters
+
+CONSIDERACIONES DE DATOS:
+- Requiere datos normalizados consistentemente
+- Sensible a valores atípicos extremos
+- Necesita recalibración periódica con nuevos datos
+
+INTERPRETACIÓN:
+- Clusters no tienen significado físico garantizado
+- Requiere validación con conocimiento experto
+- Puede no capturar eventos raros pero importantes
+
+==============================================================================
+MÉTRICAS DE EVALUACIÓN
+==============================================================================
+
+INERCIA INTRA-CLUSTER:
+- Medida de compactidad de clusters
+- Menor valor indica mejor agrupación
+- Disponible en kmeans.inertia_
+
+SILHOUETTE SCORE (RECOMENDADO):
+- Medida de separación entre clusters
+- Rango: -1 a 1 (mayor es mejor)
+- Evaluación de calidad del clustering
+
+ANÁLISIS VISUAL:
+- Inspección de separación en gráficos 2D y 3D
+- Coherencia geográfica de clusters
+- Distribuciones estadísticas por cluster
+
+==============================================================================
+RECOMENDACIONES PARA MEJORAS FUTURAS
+==============================================================================
+
+OPTIMIZACIÓN DE MODELO:
+- Evaluación de otros algoritmos (DBSCAN, Gaussian Mixture)
+- Análisis de sensibilidad a parámetros
+- Validación cruzada temporal
+
+CARACTERÍSTICAS ADICIONALES:
+- Inclusión de información temporal (estacionalidad)
+- Características derivadas (gradientes, velocidades)
+- Datos geológicos contextuales
+
+EVALUACIÓN AVANZADA:
+- Métricas de estabilidad de clusters
+- Análisis de robustez ante ruido
+- Validación con eventos conocidos
+
+==============================================================================
+ARCHIVOS GENERADOS
+==============================================================================
+
+MODELOS SERIALIZADOS:
+- kmeans_model.pkl: 3.2 KB aprox.
+- scaler.pkl: 1.5 KB aprox.
+- model_info.pkl: 0.5 KB aprox.
+
+TOTAL ESPACIO: ~5.2 KB (muy eficiente)
+
+==============================================================================
+METADATA DEL ENTRENAMIENTO
+==============================================================================
+
+LIBRERÍAS UTILIZADAS:
+- polars >= 0.19.0
+- scikit-learn >= 1.3.0
+- matplotlib >= 3.5.0
+- seaborn >= 0.11.0
+- joblib >= 1.2.0
+
+TIEMPO DE ENTRENAMIENTO: < 1 segundo (modelo simple)
+ESCALABILIDAD: Excelente para datasets de millones de registros
+REPRODUCIBILIDAD: Garantizada con mismos datos y seed
+
+HARDWARE RECOMENDADO:
+- RAM: 4GB mínimo para datasets grandes
+- CPU: Cualquier procesador moderno
+- GPU: No requerida
+
+==============================================================================
+FIN DEL DOCUMENTO
+==============================================================================
+
+Documento generado automáticamente desde train_model.ipynb
+Proyecto: Komet - ML (Machine Learning para Predicción de Terremotos)
+Fecha de generación: Octubre 2025
+
+Para más información sobre el preprocesamiento de datos, consultar:
+documentacion_transformaciones_dataframe.txt
+
+Para implementación de predicciones en producción, consultar:
+- kmeans_model.pkl
+- scaler.pkl  
+- model_info.pkl
