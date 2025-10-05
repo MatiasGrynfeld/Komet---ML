@@ -10,7 +10,7 @@ Content-Type: application/json
 }
 
 ### Alternative test - Smaller asteroid
-POST http://localhost:8000/predict/predict
+POST https://komet-ml.onrender.com/predict/predict
 Content-Type: application/json
 
 {
@@ -21,7 +21,7 @@ Content-Type: application/json
 }
 
 ### Health check (router)
-GET http://localhost:8000/predict/
+GET https://komet-ml.onrender.com/predict/
 
 ### Health check (main)
 GET http://localhost:8000/
